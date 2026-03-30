@@ -86,6 +86,15 @@ export interface HistoryEntry {
   elements: CanvasElement[]
 }
 
+// ─── Recent Board ─────────────────────────────────────────────────────────────
+
+export interface RecentBoard {
+  id: string
+  name: string
+  updatedAt: number   // unix ms
+  thumbnail?: string  // base64 data URL, optional
+}
+
 // ─── Canvas Store Shape ───────────────────────────────────────────────────────
 
 export interface CanvasState {
