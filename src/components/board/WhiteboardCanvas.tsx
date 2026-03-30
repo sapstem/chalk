@@ -4,6 +4,7 @@ import Konva from 'konva'
 import type { KonvaEventObject } from 'konva/lib/Node'
 import { motion, useMotionValue } from 'framer-motion'
 import { useCanvasStore } from '../../store/canvasStore'
+import { useKeyboardShortcuts } from '../../hooks/useKeyboardShortcuts'
 import type {
   CanvasElement,
   PenElement,
@@ -278,8 +279,6 @@ export default function WhiteboardCanvas() {
     addElement,
     updateElement,
     pushHistory,
-    undo,
-    redo,
   } = useCanvasStore()
 
   // ── Resize observer ────────────────────────────────────────────────────────
@@ -300,22 +299,7 @@ export default function WhiteboardCanvas() {
   }, [elements])
 
   // ── Keyboard shortcuts ─────────────────────────────────────────────────────
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      // Don't intercept while typing in the text editor
-      if (document.activeElement?.tagName === 'TEXTAREA') return
-      if (!(e.ctrlKey || e.metaKey)) return
-      if (e.key === 'z' && !e.shiftKey) {
-        e.preventDefault()
-        undo()
-      } else if ((e.key === 'z' && e.shiftKey) || e.key === 'y') {
-        e.preventDefault()
-        redo()
-      }
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [undo, redo])
+  useKeyboardShortcuts()
 
   // ── Sync Transformer with selected node ────────────────────────────────────
   useEffect(() => {
