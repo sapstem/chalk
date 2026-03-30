@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
-import { Stage, Layer, Line, Rect, Ellipse, Arrow } from 'react-konva'
+import { Stage, Layer, Line, Rect, Ellipse, Arrow, Transformer } from 'react-konva'
 import Konva from 'konva'
+import type { KonvaEventObject } from 'konva/lib/Node'
 import { useCanvasStore } from '../../store/canvasStore'
 import type {
   CanvasElement,
@@ -38,8 +39,8 @@ function normalizeRect(x: number, y: number, w: number, h: number) {
 
 function isTooSmall(el: CanvasElement): boolean {
   switch (el.type) {
-    case 'pen':    return el.points.length < 4
-    case 'rect':   return el.width < 2 || el.height < 2
+    case 'pen':     return el.points.length < 4
+    case 'rect':    return el.width < 2 || el.height < 2
     case 'ellipse': return el.radiusX < 1 || el.radiusY < 1
     case 'arrow': {
       const [x1 = 0, y1 = 0, x2 = 0, y2 = 0] = el.points
@@ -51,8 +52,27 @@ function isTooSmall(el: CanvasElement): boolean {
 
 // ─── Element renderer ─────────────────────────────────────────────────────────
 
-function renderElement(el: CanvasElement, key?: string): React.ReactNode {
-  const shared = { key: key ?? el.id, opacity: el.opacity, listening: false }
+interface RenderOpts {
+  selectable: boolean
+  selected: boolean
+  onSelect: () => void
+  onDragEnd: (node: Konva.Node) => void
+}
+
+function renderElement(
+  el: CanvasElement,
+  opts: RenderOpts,
+  key?: string,
+): React.ReactNode {
+  const shared = {
+    key: key ?? el.id,
+    id: el.id,
+    opacity: el.opacity,
+    listening: opts.selectable,
+    draggable: opts.selectable && opts.selected,
+    onClick: opts.onSelect,
+    onDragEnd: (e: KonvaEventObject<MouseEvent>) => opts.onDragEnd(e.target as Konva.Node),
+  }
 
   switch (el.type) {
     case 'pen':
@@ -67,6 +87,8 @@ function renderElement(el: CanvasElement, key?: string): React.ReactNode {
           tension={el.tension}
           lineCap="round"
           lineJoin="round"
+          // Widen hit area for thin pen strokes
+          hitStrokeWidth={Math.max(el.strokeWidth, 12)}
         />
       )
     case 'rect':
@@ -84,12 +106,12 @@ function renderElement(el: CanvasElement, key?: string): React.ReactNode {
         />
       )
     case 'ellipse':
+      // x/y stored as center (Konva convention)
       return (
         <Ellipse
           {...shared}
-          // x,y stored as top-left; Konva expects center
-          x={el.x + el.radiusX}
-          y={el.y + el.radiusY}
+          x={el.x}
+          y={el.y}
           radiusX={el.radiusX}
           radiusY={el.radiusY}
           fill={el.fillColor}
@@ -111,10 +133,31 @@ function renderElement(el: CanvasElement, key?: string): React.ReactNode {
           pointerAtEnding={el.endArrow}
           pointerLength={10}
           pointerWidth={8}
+          hitStrokeWidth={Math.max(el.strokeWidth, 12)}
         />
       )
     default:
       return null
+  }
+}
+
+// ─── Drag-end position update ─────────────────────────────────────────────────
+
+function applyDrag(
+  el: CanvasElement,
+  node: Konva.Node,
+  update: (id: string, changes: Partial<CanvasElement>) => void,
+) {
+  if (el.type === 'rect' || el.type === 'ellipse') {
+    // x/y IS the Konva position — just sync it
+    update(el.id, { x: node.x(), y: node.y() })
+  } else if (el.type === 'pen' || el.type === 'arrow') {
+    // x/y is 0; Konva offset represents delta — bake into points
+    const dx = node.x()
+    const dy = node.y()
+    const newPoints = el.points.map((v, i) => (i % 2 === 0 ? v + dx : v + dy))
+    update(el.id, { points: newPoints } as Partial<CanvasElement>)
+    node.position({ x: 0, y: 0 })
   }
 }
 
@@ -123,6 +166,7 @@ function renderElement(el: CanvasElement, key?: string): React.ReactNode {
 export default function WhiteboardCanvas() {
   const containerRef = useRef<HTMLDivElement>(null)
   const stageRef = useRef<Konva.Stage>(null)
+  const transformerRef = useRef<Konva.Transformer>(null)
   const [stageSize, setStageSize] = useState({ width: 0, height: 0 })
   const [inProgress, setInProgress] = useState<CanvasElement | null>(null)
 
@@ -135,7 +179,10 @@ export default function WhiteboardCanvas() {
     snapToGrid,
     activeTool,
     drawingDefaults,
+    selectedId,
+    setSelectedId,
     addElement,
+    updateElement,
     pushHistory,
   } = useCanvasStore()
 
@@ -151,10 +198,27 @@ export default function WhiteboardCanvas() {
     return () => ro.disconnect()
   }, [])
 
-  // ── Persist to localStorage ────────────────────────────────────────────────
+  // ── Persist elements to localStorage ──────────────────────────────────────
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(elements))
   }, [elements])
+
+  // ── Sync Transformer with selected node ────────────────────────────────────
+  useEffect(() => {
+    const tr = transformerRef.current
+    if (!tr) return
+    if (selectedId) {
+      const node = stageRef.current?.findOne(`#${selectedId}`)
+      if (node) {
+        tr.nodes([node as Konva.Shape])
+      } else {
+        tr.nodes([])
+      }
+    } else {
+      tr.nodes([])
+    }
+    tr.getLayer()?.batchDraw()
+  }, [selectedId, elements])
 
   // ── Coordinate helpers ─────────────────────────────────────────────────────
   const getCanvasPos = (): { x: number; y: number } | null => {
@@ -167,7 +231,15 @@ export default function WhiteboardCanvas() {
   }
 
   // ── Mouse handlers ─────────────────────────────────────────────────────────
-  const handleMouseDown = () => {
+  const handleStageMouseDown = (e: KonvaEventObject<MouseEvent>) => {
+    // Select tool: click background → deselect
+    if (activeTool === 'select') {
+      if (e.target === stageRef.current) {
+        setSelectedId(null)
+      }
+      return
+    }
+
     if (!DRAWING_TOOLS.has(activeTool)) return
     const pos = getCanvasPos()
     if (!pos) return
@@ -240,22 +312,23 @@ export default function WhiteboardCanvas() {
         points: [...inProgress.points, pos.x, pos.y],
       })
     } else if (inProgress.type === 'rect') {
-      const norm = normalizeRect(
-        startPos.current.x,
-        startPos.current.y,
-        pos.x - startPos.current.x,
-        pos.y - startPos.current.y,
-      )
-      setInProgress({ ...inProgress, ...norm })
-    } else if (inProgress.type === 'ellipse') {
-      const radiusX = Math.abs(pos.x - startPos.current.x) / 2
-      const radiusY = Math.abs(pos.y - startPos.current.y) / 2
       setInProgress({
         ...inProgress,
-        x: Math.min(pos.x, startPos.current.x),
-        y: Math.min(pos.y, startPos.current.y),
-        radiusX,
-        radiusY,
+        ...normalizeRect(
+          startPos.current.x,
+          startPos.current.y,
+          pos.x - startPos.current.x,
+          pos.y - startPos.current.y,
+        ),
+      })
+    } else if (inProgress.type === 'ellipse') {
+      // Store center x/y so Konva position matches stored position directly
+      setInProgress({
+        ...inProgress,
+        x: (startPos.current.x + pos.x) / 2,
+        y: (startPos.current.y + pos.y) / 2,
+        radiusX: Math.abs(pos.x - startPos.current.x) / 2,
+        radiusY: Math.abs(pos.y - startPos.current.y) / 2,
       })
     } else if (inProgress.type === 'arrow') {
       setInProgress({
@@ -275,11 +348,23 @@ export default function WhiteboardCanvas() {
     setInProgress(null)
   }
 
+  const handleDragEnd = (el: CanvasElement, node: Konva.Node) => {
+    applyDrag(el, node, updateElement)
+    pushHistory()
+  }
+
+  // ── Shared render options for each tool mode ───────────────────────────────
+  const isSelectTool = activeTool === 'select'
+  const inProgressOpts: RenderOpts = {
+    selectable: false,
+    selected: false,
+    onSelect: () => {},
+    onDragEnd: () => {},
+  }
+
   // ── Dot grid offsets follow viewport pan ───────────────────────────────────
   const dotOffsetX = ((viewport.x % DOT_SPACING) + DOT_SPACING) % DOT_SPACING
   const dotOffsetY = ((viewport.y % DOT_SPACING) + DOT_SPACING) % DOT_SPACING
-
-  const isDrawingTool = DRAWING_TOOLS.has(activeTool)
 
   return (
     <div
@@ -289,7 +374,7 @@ export default function WhiteboardCanvas() {
         position: 'relative',
         overflow: 'hidden',
         background: '#1a1a1c',
-        cursor: isDrawingTool ? 'crosshair' : 'default',
+        cursor: isSelectTool ? 'grab' : DRAWING_TOOLS.has(activeTool) ? 'crosshair' : 'default',
       }}
     >
       {/* Dot grid */}
@@ -330,7 +415,7 @@ export default function WhiteboardCanvas() {
           width={stageSize.width}
           height={stageSize.height}
           style={{ position: 'absolute', top: 0, left: 0 }}
-          onMouseDown={handleMouseDown}
+          onMouseDown={handleStageMouseDown}
           onMouseMove={handleMouseMove}
           onMouseUp={commitDrawing}
           onMouseLeave={commitDrawing}
@@ -341,8 +426,30 @@ export default function WhiteboardCanvas() {
             scaleX={viewport.scale}
             scaleY={viewport.scale}
           >
-            {elements.map((el) => renderElement(el))}
-            {inProgress && renderElement(inProgress, '__inprogress__')}
+            {elements.map((el) =>
+              renderElement(
+                el,
+                {
+                  selectable: isSelectTool,
+                  selected: el.id === selectedId,
+                  onSelect: () => setSelectedId(el.id),
+                  onDragEnd: (node) => handleDragEnd(el, node),
+                },
+              )
+            )}
+
+            {inProgress && renderElement(inProgress, inProgressOpts, '__inprogress__')}
+
+            {/* Selection outline via Transformer */}
+            <Transformer
+              ref={transformerRef}
+              resizeEnabled={false}
+              rotateEnabled={false}
+              borderStroke="#5b6af0"
+              borderStrokeWidth={2}
+              borderDash={[5, 3]}
+              anchorSize={0}
+            />
           </Layer>
         </Stage>
       )}
