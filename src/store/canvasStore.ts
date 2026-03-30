@@ -1,6 +1,18 @@
 import { create } from 'zustand'
 import type { CanvasElement, CanvasState, DrawingDefaults, ToolType, Viewport } from '../types'
 
+const STORAGE_KEY = 'chalk_elements'
+
+function loadSavedElements(): CanvasElement[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    if (!raw) return []
+    return JSON.parse(raw) as CanvasElement[]
+  } catch {
+    return []
+  }
+}
+
 interface CanvasActions {
   // Tool
   setActiveTool: (tool: ToolType) => void
@@ -30,11 +42,11 @@ const DEFAULT_VIEWPORT: Viewport = { x: 0, y: 0, scale: 1 }
 
 export const useCanvasStore = create<CanvasState & CanvasActions>((set) => ({
   // ─── State ───────────────────────────────────────────────────────────────
-  elements: [],
+  elements: loadSavedElements(),
   selectedId: null,
   activeTool: 'select',
   viewport: DEFAULT_VIEWPORT,
-  history: [{ elements: [] }],
+  history: [{ elements: loadSavedElements() }],
   historyIndex: 0,
   snapToGrid: false,
   drawingDefaults: {
