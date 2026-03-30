@@ -9,6 +9,7 @@ export type ToolType =
   | 'text'
   | 'pen'
   | 'eraser'
+  | 'sticky'
 
 // ─── Canvas Element Types ─────────────────────────────────────────────────────
 
@@ -97,6 +98,13 @@ export interface RecentBoard {
 
 // ─── Canvas Store Shape ───────────────────────────────────────────────────────
 
+export interface DrawingDefaults {
+  fillColor: string
+  strokeColor: string
+  strokeWidth: number
+  opacity: number
+}
+
 export interface CanvasState {
   elements: CanvasElement[]
   selectedId: string | null
@@ -104,4 +112,6 @@ export interface CanvasState {
   viewport: Viewport
   history: HistoryEntry[]
   historyIndex: number
+  snapToGrid: boolean
+  drawingDefaults: DrawingDefaults
 }

@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { CanvasElement, CanvasState, ToolType, Viewport } from '../types'
+import type { CanvasElement, CanvasState, DrawingDefaults, ToolType, Viewport } from '../types'
 
 interface CanvasActions {
   // Tool
@@ -15,6 +15,10 @@ interface CanvasActions {
   addElement: (element: CanvasElement) => void
   updateElement: (id: string, changes: Partial<CanvasElement>) => void
   removeElement: (id: string) => void
+
+  // Settings
+  setSnapToGrid: (snap: boolean) => void
+  setDrawingDefaults: (defaults: Partial<DrawingDefaults>) => void
 
   // Undo / Redo
   undo: () => void
@@ -32,6 +36,13 @@ export const useCanvasStore = create<CanvasState & CanvasActions>((set) => ({
   viewport: DEFAULT_VIEWPORT,
   history: [{ elements: [] }],
   historyIndex: 0,
+  snapToGrid: false,
+  drawingDefaults: {
+    fillColor: '#e2e8f0',
+    strokeColor: '#1c1917',
+    strokeWidth: 2,
+    opacity: 1,
+  },
 
   // ─── Tool ────────────────────────────────────────────────────────────────
   setActiveTool: (tool) => set({ activeTool: tool }),
@@ -59,6 +70,12 @@ export const useCanvasStore = create<CanvasState & CanvasActions>((set) => ({
       elements: state.elements.filter((el) => el.id !== id),
       selectedId: state.selectedId === id ? null : state.selectedId,
     })),
+
+  // ─── Settings ────────────────────────────────────────────────────────────
+  setSnapToGrid: (snap) => set({ snapToGrid: snap }),
+
+  setDrawingDefaults: (partial) =>
+    set((state) => ({ drawingDefaults: { ...state.drawingDefaults, ...partial } })),
 
   // ─── History ─────────────────────────────────────────────────────────────
   pushHistory: () =>
