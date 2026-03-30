@@ -1,6 +1,6 @@
+import { motion } from 'framer-motion'
 import { useCanvasStore } from '../../store/canvasStore'
 import type { ToolType } from '../../types'
-import IconButton from '../ui/IconButton'
 import Tooltip from '../ui/Tooltip'
 
 // ─── SVG Icons ────────────────────────────────────────────────────────────────
@@ -85,6 +85,61 @@ const TOOLS: ToolConfig[] = [
 
 const QUICK_COLORS = ['#1c1917', '#ef4444', '#f59e0b', '#10b981', '#3b82f6', '#8b5cf6']
 
+// ─── Animated tool button ─────────────────────────────────────────────────────
+
+interface ToolButtonProps {
+  tool: ToolType
+  label: string
+  icon: React.ReactNode
+  active: boolean
+  onClick: () => void
+}
+
+function ToolButton({ label, icon, active, onClick }: ToolButtonProps) {
+  return (
+    <Tooltip content={label} placement="right">
+      <button
+        onClick={onClick}
+        aria-label={label}
+        style={{
+          position: 'relative',
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          width: 32,
+          height: 32,
+          border: 'none',
+          background: 'transparent',
+          borderRadius: 'var(--radius-md)',
+          color: active ? 'var(--color-text-on-brand)' : 'var(--color-text-secondary)',
+          cursor: 'pointer',
+          flexShrink: 0,
+          transition: 'color var(--transition-fast)',
+          padding: 0,
+        }}
+      >
+        {/* Sliding pill — shared layoutId makes it animate between active tools */}
+        {active && (
+          <motion.span
+            layoutId="toolbar-pill"
+            style={{
+              position: 'absolute',
+              inset: 0,
+              borderRadius: 'var(--radius-md)',
+              background: 'var(--color-brand-primary)',
+              zIndex: 0,
+            }}
+            transition={{ type: 'spring', stiffness: 420, damping: 32 }}
+          />
+        )}
+        <span style={{ position: 'relative', zIndex: 1, display: 'flex', fontSize: 16 }}>
+          {icon}
+        </span>
+      </button>
+    </Tooltip>
+  )
+}
+
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function ToolBar() {
@@ -105,15 +160,15 @@ export default function ToolBar() {
         zIndex: 'var(--z-toolbar)',
       }}
     >
-      {/* Tool buttons */}
+      {/* Tool buttons with sliding pill highlight */}
       {TOOLS.map(({ tool, label, icon }) => (
-        <IconButton
+        <ToolButton
           key={tool}
-          icon={icon}
+          tool={tool}
           label={label}
+          icon={icon}
           active={activeTool === tool}
           onClick={() => setActiveTool(tool)}
-          tooltipPlacement="right"
         />
       ))}
 

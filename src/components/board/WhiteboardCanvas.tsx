@@ -16,24 +16,20 @@ import type {
   Viewport,
 } from '../../types'
 import StickyNote, { randomStickyColor, randomRotation } from './StickyNote'
+import {
+  generateId,
+  snapCoord,
+  GRID_SIZE,
+  screenToCanvas,
+  canvasToScreen,
+} from '../../utils/canvasHelpers'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const DOT_SIZE = 1.5
-const DOT_SPACING = 24
 const STORAGE_KEY = 'chalk_elements'
 const DRAWING_TOOLS = new Set(['pen', 'rect', 'ellipse', 'arrow'])
 const DEFAULT_FONT_SIZE = 16
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function genId(): string {
-  return crypto.randomUUID()
-}
-
-function snapCoord(v: number, snap: boolean): number {
-  return snap ? Math.round(v / DOT_SPACING) * DOT_SPACING : v
-}
 
 function normalizeRect(x: number, y: number, w: number, h: number) {
   return {
@@ -204,15 +200,17 @@ interface StickyNoteItemProps {
 }
 
 function StickyNoteItem({ el, viewport, interactive, onUpdate, onTextCommit }: StickyNoteItemProps) {
-  const motionX = useMotionValue(el.x * viewport.scale + viewport.x)
-  const motionY = useMotionValue(el.y * viewport.scale + viewport.y)
+  const { x: initX, y: initY } = canvasToScreen(el.x, el.y, viewport)
+  const motionX = useMotionValue(initX)
+  const motionY = useMotionValue(initY)
   const isDragging = useRef(false)
 
   // Sync screen position when store coords or viewport changes (skip during drag)
   useEffect(() => {
     if (isDragging.current) return
-    motionX.set(el.x * viewport.scale + viewport.x)
-    motionY.set(el.y * viewport.scale + viewport.y)
+    const { x: sx, y: sy } = canvasToScreen(el.x, el.y, viewport)
+    motionX.set(sx)
+    motionY.set(sy)
   }, [el.x, el.y, viewport.x, viewport.y, viewport.scale, motionX, motionY])
 
   return (
@@ -238,8 +236,7 @@ function StickyNoteItem({ el, viewport, interactive, onUpdate, onTextCommit }: S
       // Update store once inertia settles so stored coords match final resting position
       onDragTransitionEnd={() => {
         isDragging.current = false
-        const newX = (motionX.get() - viewport.x) / viewport.scale
-        const newY = (motionY.get() - viewport.y) / viewport.scale
+        const { x: newX, y: newY } = screenToCanvas(motionX.get(), motionY.get(), viewport)
         onUpdate(newX, newY)
       }}
     >
@@ -322,14 +319,12 @@ export default function WhiteboardCanvas() {
   const getCanvasPos = (): { x: number; y: number } | null => {
     const pos = stageRef.current?.getPointerPosition()
     if (!pos) return null
+    const raw = screenToCanvas(pos.x, pos.y, viewport)
     return {
-      x: snapCoord((pos.x - viewport.x) / viewport.scale, snapToGrid),
-      y: snapCoord((pos.y - viewport.y) / viewport.scale, snapToGrid),
+      x: snapCoord(raw.x, snapToGrid),
+      y: snapCoord(raw.y, snapToGrid),
     }
   }
-
-  const toScreenX = (cx: number) => cx * viewport.scale + viewport.x
-  const toScreenY = (cy: number) => cy * viewport.scale + viewport.y
 
   // ── Text tool ──────────────────────────────────────────────────────────────
   const commitText = () => {
@@ -370,7 +365,7 @@ export default function WhiteboardCanvas() {
         const pos = getCanvasPos()
         if (!pos) return
         const el: StickyElement = {
-          id: genId(),
+          id: generateId(),
           type: 'sticky',
           x: pos.x,
           y: pos.y,
@@ -397,7 +392,7 @@ export default function WhiteboardCanvas() {
       if (activeText) return // in-flight textarea will blur → commit
       if (e.target === stageRef.current) {
         const pos = getCanvasPos()
-        if (pos) setActiveText({ id: genId(), x: pos.x, y: pos.y, text: '' })
+        if (pos) setActiveText({ id: generateId(), x: pos.x, y: pos.y, text: '' })
       }
       return
     }
@@ -416,7 +411,7 @@ export default function WhiteboardCanvas() {
     startPos.current = pos
 
     const base = {
-      id: genId(),
+      id: generateId(),
       x: 0,
       y: 0,
       rotation: 0,
@@ -528,8 +523,8 @@ export default function WhiteboardCanvas() {
     onDragEnd: () => {},
   }
 
-  const dotOffsetX = ((viewport.x % DOT_SPACING) + DOT_SPACING) % DOT_SPACING
-  const dotOffsetY = ((viewport.y % DOT_SPACING) + DOT_SPACING) % DOT_SPACING
+  const dotOffsetX = ((viewport.x % GRID_SIZE) + GRID_SIZE) % GRID_SIZE
+  const dotOffsetY = ((viewport.y % GRID_SIZE) + GRID_SIZE) % GRID_SIZE
 
   const cursor = isTextTool
     ? 'text'
@@ -549,9 +544,9 @@ export default function WhiteboardCanvas() {
         aria-hidden
         style={{
           position: 'absolute',
-          inset: -DOT_SPACING,
+          inset: -GRID_SIZE,
           backgroundImage: `radial-gradient(circle, rgba(255,255,255,0.18) ${DOT_SIZE}px, transparent ${DOT_SIZE}px)`,
-          backgroundSize: `${DOT_SPACING}px ${DOT_SPACING}px`,
+          backgroundSize: `${GRID_SIZE}px ${GRID_SIZE}px`,
           backgroundPosition: `${dotOffsetX}px ${dotOffsetY}px`,
           pointerEvents: 'none',
         }}
@@ -563,12 +558,12 @@ export default function WhiteboardCanvas() {
           aria-hidden
           style={{
             position: 'absolute',
-            inset: -DOT_SPACING,
+            inset: -GRID_SIZE,
             backgroundImage: `
               linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),
               linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px)
             `,
-            backgroundSize: `${DOT_SPACING}px ${DOT_SPACING}px`,
+            backgroundSize: `${GRID_SIZE}px ${GRID_SIZE}px`,
             backgroundPosition: `${dotOffsetX}px ${dotOffsetY}px`,
             pointerEvents: 'none',
           }}
@@ -688,8 +683,8 @@ export default function WhiteboardCanvas() {
           }}
           style={{
             position: 'absolute',
-            left: toScreenX(activeText.x),
-            top: toScreenY(activeText.y),
+            left: canvasToScreen(activeText.x, activeText.y, viewport).x,
+            top: canvasToScreen(activeText.x, activeText.y, viewport).y,
             fontSize: `${DEFAULT_FONT_SIZE * viewport.scale}px`,
             fontFamily: 'Inter, system-ui, sans-serif',
             lineHeight: 1.4,

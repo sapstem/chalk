@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { useCanvasStore } from '../../store/canvasStore'
+import { clampZoom, roundZoom, zoomPercent } from '../../utils/canvasHelpers'
 import IconButton from '../ui/IconButton'
 import Button from '../ui/Button'
 import Tooltip from '../ui/Tooltip'
@@ -60,7 +61,7 @@ export default function TopBar() {
 
   const canUndo = historyIndex > 0
   const canRedo = historyIndex < history.length - 1
-  const zoomPct = Math.round(viewport.scale * 100)
+  const zoomPct = zoomPercent(viewport.scale)
 
   useEffect(() => {
     if (editing) inputRef.current?.select()
@@ -72,8 +73,7 @@ export default function TopBar() {
   }
 
   const adjustZoom = (delta: number) => {
-    const next = Math.min(4, Math.max(0.1, viewport.scale + delta))
-    setViewport({ scale: Math.round(next * 100) / 100 })
+    setViewport({ scale: roundZoom(clampZoom(viewport.scale + delta)) })
   }
 
   return (
