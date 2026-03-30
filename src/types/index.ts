@@ -11,9 +11,13 @@ export type ToolType =
   | 'eraser'
   | 'sticky'
 
+// ─── Sticky Note Color ────────────────────────────────────────────────────────
+
+export type StickyColor = 'yellow' | 'blue' | 'pink' | 'green'
+
 // ─── Canvas Element Types ─────────────────────────────────────────────────────
 
-export type ElementType = 'rect' | 'ellipse' | 'arrow' | 'text' | 'pen'
+export type ElementType = 'rect' | 'ellipse' | 'arrow' | 'text' | 'pen' | 'sticky'
 
 export interface BaseElement {
   id: string
@@ -66,12 +70,21 @@ export interface PenElement extends BaseElement {
   tension: number
 }
 
+export interface StickyElement extends BaseElement {
+  type: 'sticky'
+  text: string
+  color: StickyColor
+  width: number
+  height: number
+}
+
 export type CanvasElement =
   | RectElement
   | EllipseElement
   | ArrowElement
   | TextElement
   | PenElement
+  | StickyElement
 
 // ─── Viewport ─────────────────────────────────────────────────────────────────
 

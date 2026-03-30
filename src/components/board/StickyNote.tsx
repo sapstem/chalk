@@ -1,16 +1,15 @@
 import { useState, useRef, useEffect } from 'react'
 import { motion } from 'framer-motion'
+import type { StickyColor } from '../../types'
 
 // ─── Pastel palette ───────────────────────────────────────────────────────────
 
-export const STICKY_COLORS = {
+export const STICKY_COLORS: Record<StickyColor, { bg: string; shadow: string; text: string }> = {
   yellow: { bg: '#fef08a', shadow: '#d4a800', text: '#713f12' },
   blue:   { bg: '#bae6fd', shadow: '#0077aa', text: '#0c4a6e' },
   pink:   { bg: '#fbcfe8', shadow: '#be185d', text: '#831843' },
   green:  { bg: '#bbf7d0', shadow: '#15803d', text: '#14532d' },
-} as const
-
-export type StickyColor = keyof typeof STICKY_COLORS
+}
 
 const COLOR_KEYS = Object.keys(STICKY_COLORS) as StickyColor[]
 

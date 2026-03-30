@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { Stage, Layer, Line, Rect, Ellipse, Arrow, Transformer, Text } from 'react-konva'
 import Konva from 'konva'
 import type { KonvaEventObject } from 'konva/lib/Node'
+import { motion, useMotionValue } from 'framer-motion'
 import { useCanvasStore } from '../../store/canvasStore'
 import type {
   CanvasElement,
@@ -10,7 +11,10 @@ import type {
   EllipseElement,
   ArrowElement,
   TextElement,
+  StickyElement,
+  Viewport,
 } from '../../types'
+import StickyNote, { randomStickyColor, randomRotation } from './StickyNote'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -188,6 +192,68 @@ function applyDrag(
   }
 }
 
+// ─── Sticky note canvas item ──────────────────────────────────────────────────
+
+interface StickyNoteItemProps {
+  el: StickyElement
+  viewport: Viewport
+  interactive: boolean
+  onUpdate: (x: number, y: number) => void
+  onTextCommit: (text: string) => void
+}
+
+function StickyNoteItem({ el, viewport, interactive, onUpdate, onTextCommit }: StickyNoteItemProps) {
+  const motionX = useMotionValue(el.x * viewport.scale + viewport.x)
+  const motionY = useMotionValue(el.y * viewport.scale + viewport.y)
+  const isDragging = useRef(false)
+
+  // Sync screen position when store coords or viewport changes (skip during drag)
+  useEffect(() => {
+    if (isDragging.current) return
+    motionX.set(el.x * viewport.scale + viewport.x)
+    motionY.set(el.y * viewport.scale + viewport.y)
+  }, [el.x, el.y, viewport.x, viewport.y, viewport.scale, motionX, motionY])
+
+  return (
+    <motion.div
+      style={{
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        x: motionX,
+        y: motionY,
+        scale: viewport.scale,
+        transformOrigin: 'top left',
+        zIndex: 5,
+        // Block pointer events when a non-sticky/select tool is active
+        pointerEvents: interactive ? 'auto' : 'none',
+        cursor: 'grab',
+      }}
+      drag
+      dragMomentum
+      dragTransition={{ power: 0.25, timeConstant: 180 }}
+      whileDrag={{ cursor: 'grabbing', zIndex: 50 }}
+      onDragStart={() => { isDragging.current = true }}
+      // Update store once inertia settles so stored coords match final resting position
+      onDragTransitionEnd={() => {
+        isDragging.current = false
+        const newX = (motionX.get() - viewport.x) / viewport.scale
+        const newY = (motionY.get() - viewport.y) / viewport.scale
+        onUpdate(newX, newY)
+      }}
+    >
+      <StickyNote
+        initialText={el.text}
+        color={el.color}
+        rotation={el.rotation}
+        width={el.width}
+        height={el.height}
+        onCommit={onTextCommit}
+      />
+    </motion.div>
+  )
+}
+
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function WhiteboardCanvas() {
@@ -314,6 +380,34 @@ export default function WhiteboardCanvas() {
 
   // ── Mouse handlers ─────────────────────────────────────────────────────────
   const handleStageMouseDown = (e: KonvaEventObject<MouseEvent>) => {
+    // Sticky tool: place a new sticky note on background click
+    if (activeTool === 'sticky') {
+      if (e.target === stageRef.current) {
+        const pos = getCanvasPos()
+        if (!pos) return
+        const el: StickyElement = {
+          id: genId(),
+          type: 'sticky',
+          x: pos.x,
+          y: pos.y,
+          rotation: randomRotation(),
+          opacity: 1,
+          locked: false,
+          visible: true,
+          fillColor: 'transparent',
+          strokeColor: 'transparent',
+          strokeWidth: 0,
+          text: '',
+          color: randomStickyColor(),
+          width: 200,
+          height: 200,
+        }
+        addElement(el)
+        pushHistory()
+      }
+      return
+    }
+
     // Text tool: only place on background click, blur handles existing commit
     if (activeTool === 'text') {
       if (activeText) return // in-flight textarea will blur → commit
@@ -533,6 +627,23 @@ export default function WhiteboardCanvas() {
           </span>
         </div>
       )}
+
+      {/* Sticky notes HTML overlay — rendered above Konva stage */}
+      {elements
+        .filter((el): el is StickyElement => el.type === 'sticky')
+        .map((el) => (
+          <StickyNoteItem
+            key={el.id}
+            el={el}
+            viewport={viewport}
+            interactive={isSelectTool || activeTool === 'sticky'}
+            onUpdate={(x, y) => {
+              updateElement(el.id, { x, y })
+              pushHistory()
+            }}
+            onTextCommit={(text) => updateElement(el.id, { text })}
+          />
+        ))}
 
       {/* Konva Stage */}
       {stageSize.width > 0 && (
