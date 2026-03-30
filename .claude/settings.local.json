@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install:*)",
+      "Read(//c/Users/noral/OneDrive/Desktop/**)",
+      "Bash(npm create:*)",
+      "Bash(npx tsc:*)"
+    ]
+  }
+}
