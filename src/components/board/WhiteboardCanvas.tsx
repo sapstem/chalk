@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { Stage, Layer, Line, Rect, Ellipse, Arrow, Transformer } from 'react-konva'
+import { Stage, Layer, Line, Rect, Ellipse, Arrow, Transformer, Text } from 'react-konva'
 import Konva from 'konva'
 import type { KonvaEventObject } from 'konva/lib/Node'
 import { useCanvasStore } from '../../store/canvasStore'
@@ -9,6 +9,7 @@ import type {
   RectElement,
   EllipseElement,
   ArrowElement,
+  TextElement,
 } from '../../types'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -17,6 +18,7 @@ const DOT_SIZE = 1.5
 const DOT_SPACING = 24
 const STORAGE_KEY = 'chalk_elements'
 const DRAWING_TOOLS = new Set(['pen', 'rect', 'ellipse', 'arrow'])
+const DEFAULT_FONT_SIZE = 16
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -48,6 +50,15 @@ function isTooSmall(el: CanvasElement): boolean {
     }
     default: return false
   }
+}
+
+// ─── Active text editor state ─────────────────────────────────────────────────
+
+interface ActiveTextEditor {
+  id: string
+  x: number   // canvas coords
+  y: number   // canvas coords
+  text: string
 }
 
 // ─── Element renderer ─────────────────────────────────────────────────────────
@@ -87,7 +98,6 @@ function renderElement(
           tension={el.tension}
           lineCap="round"
           lineJoin="round"
-          // Widen hit area for thin pen strokes
           hitStrokeWidth={Math.max(el.strokeWidth, 12)}
         />
       )
@@ -106,7 +116,6 @@ function renderElement(
         />
       )
     case 'ellipse':
-      // x/y stored as center (Konva convention)
       return (
         <Ellipse
           {...shared}
@@ -136,6 +145,26 @@ function renderElement(
           hitStrokeWidth={Math.max(el.strokeWidth, 12)}
         />
       )
+    case 'text': {
+      const fontStyle = [
+        el.fontWeight === 'bold' ? 'bold' : '',
+        el.fontStyle === 'italic' ? 'italic' : '',
+      ].filter(Boolean).join(' ') || 'normal'
+      return (
+        <Text
+          {...shared}
+          x={el.x}
+          y={el.y}
+          text={el.text}
+          fontSize={el.fontSize}
+          fontFamily={el.fontFamily}
+          fontStyle={fontStyle}
+          align={el.align}
+          fill={el.strokeColor}
+          width={el.width > 0 ? el.width : undefined}
+        />
+      )
+    }
     default:
       return null
   }
@@ -148,11 +177,9 @@ function applyDrag(
   node: Konva.Node,
   update: (id: string, changes: Partial<CanvasElement>) => void,
 ) {
-  if (el.type === 'rect' || el.type === 'ellipse') {
-    // x/y IS the Konva position — just sync it
+  if (el.type === 'rect' || el.type === 'ellipse' || el.type === 'text') {
     update(el.id, { x: node.x(), y: node.y() })
   } else if (el.type === 'pen' || el.type === 'arrow') {
-    // x/y is 0; Konva offset represents delta — bake into points
     const dx = node.x()
     const dy = node.y()
     const newPoints = el.points.map((v, i) => (i % 2 === 0 ? v + dx : v + dy))
@@ -169,6 +196,7 @@ export default function WhiteboardCanvas() {
   const transformerRef = useRef<Konva.Transformer>(null)
   const [stageSize, setStageSize] = useState({ width: 0, height: 0 })
   const [inProgress, setInProgress] = useState<CanvasElement | null>(null)
+  const [activeText, setActiveText] = useState<ActiveTextEditor | null>(null)
 
   const isDrawing = useRef(false)
   const startPos = useRef({ x: 0, y: 0 })
@@ -184,6 +212,8 @@ export default function WhiteboardCanvas() {
     addElement,
     updateElement,
     pushHistory,
+    undo,
+    redo,
   } = useCanvasStore()
 
   // ── Resize observer ────────────────────────────────────────────────────────
@@ -202,6 +232,24 @@ export default function WhiteboardCanvas() {
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(elements))
   }, [elements])
+
+  // ── Keyboard shortcuts ─────────────────────────────────────────────────────
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      // Don't intercept while typing in the text editor
+      if (document.activeElement?.tagName === 'TEXTAREA') return
+      if (!(e.ctrlKey || e.metaKey)) return
+      if (e.key === 'z' && !e.shiftKey) {
+        e.preventDefault()
+        undo()
+      } else if ((e.key === 'z' && e.shiftKey) || e.key === 'y') {
+        e.preventDefault()
+        redo()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [undo, redo])
 
   // ── Sync Transformer with selected node ────────────────────────────────────
   useEffect(() => {
@@ -230,13 +278,55 @@ export default function WhiteboardCanvas() {
     }
   }
 
+  const toScreenX = (cx: number) => cx * viewport.scale + viewport.x
+  const toScreenY = (cy: number) => cy * viewport.scale + viewport.y
+
+  // ── Text tool ──────────────────────────────────────────────────────────────
+  const commitText = () => {
+    if (!activeText || !activeText.text.trim()) {
+      setActiveText(null)
+      return
+    }
+    const el: TextElement = {
+      id: activeText.id,
+      type: 'text',
+      x: activeText.x,
+      y: activeText.y,
+      rotation: 0,
+      opacity: drawingDefaults.opacity,
+      locked: false,
+      visible: true,
+      fillColor: 'transparent',
+      strokeColor: drawingDefaults.strokeColor,
+      strokeWidth: 0,
+      text: activeText.text,
+      fontSize: DEFAULT_FONT_SIZE,
+      fontFamily: 'Inter, system-ui, sans-serif',
+      fontStyle: 'normal',
+      fontWeight: 'normal',
+      align: 'left',
+      width: 0,
+    }
+    addElement(el)
+    pushHistory()
+    setActiveText(null)
+  }
+
   // ── Mouse handlers ─────────────────────────────────────────────────────────
   const handleStageMouseDown = (e: KonvaEventObject<MouseEvent>) => {
-    // Select tool: click background → deselect
-    if (activeTool === 'select') {
+    // Text tool: only place on background click, blur handles existing commit
+    if (activeTool === 'text') {
+      if (activeText) return // in-flight textarea will blur → commit
       if (e.target === stageRef.current) {
-        setSelectedId(null)
+        const pos = getCanvasPos()
+        if (pos) setActiveText({ id: genId(), x: pos.x, y: pos.y, text: '' })
       }
+      return
+    }
+
+    // Select tool: background click → deselect
+    if (activeTool === 'select') {
+      if (e.target === stageRef.current) setSelectedId(null)
       return
     }
 
@@ -307,10 +397,7 @@ export default function WhiteboardCanvas() {
     if (!pos) return
 
     if (inProgress.type === 'pen') {
-      setInProgress({
-        ...inProgress,
-        points: [...inProgress.points, pos.x, pos.y],
-      })
+      setInProgress({ ...inProgress, points: [...inProgress.points, pos.x, pos.y] })
     } else if (inProgress.type === 'rect') {
       setInProgress({
         ...inProgress,
@@ -322,7 +409,6 @@ export default function WhiteboardCanvas() {
         ),
       })
     } else if (inProgress.type === 'ellipse') {
-      // Store center x/y so Konva position matches stored position directly
       setInProgress({
         ...inProgress,
         x: (startPos.current.x + pos.x) / 2,
@@ -353,8 +439,10 @@ export default function WhiteboardCanvas() {
     pushHistory()
   }
 
-  // ── Shared render options for each tool mode ───────────────────────────────
+  // ── Derived ────────────────────────────────────────────────────────────────
   const isSelectTool = activeTool === 'select'
+  const isTextTool = activeTool === 'text'
+
   const inProgressOpts: RenderOpts = {
     selectable: false,
     selected: false,
@@ -362,20 +450,21 @@ export default function WhiteboardCanvas() {
     onDragEnd: () => {},
   }
 
-  // ── Dot grid offsets follow viewport pan ───────────────────────────────────
   const dotOffsetX = ((viewport.x % DOT_SPACING) + DOT_SPACING) % DOT_SPACING
   const dotOffsetY = ((viewport.y % DOT_SPACING) + DOT_SPACING) % DOT_SPACING
+
+  const cursor = isTextTool
+    ? 'text'
+    : isSelectTool
+    ? 'grab'
+    : DRAWING_TOOLS.has(activeTool)
+    ? 'crosshair'
+    : 'default'
 
   return (
     <div
       ref={containerRef}
-      style={{
-        flex: 1,
-        position: 'relative',
-        overflow: 'hidden',
-        background: '#1a1a1c',
-        cursor: isSelectTool ? 'grab' : DRAWING_TOOLS.has(activeTool) ? 'crosshair' : 'default',
-      }}
+      style={{ flex: 1, position: 'relative', overflow: 'hidden', background: '#1a1a1c', cursor }}
     >
       {/* Dot grid */}
       <div
@@ -408,6 +497,43 @@ export default function WhiteboardCanvas() {
         />
       )}
 
+      {/* Empty state */}
+      {elements.length === 0 && !inProgress && !activeText && (
+        <div
+          aria-hidden
+          style={{
+            position: 'absolute',
+            inset: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 10,
+            pointerEvents: 'none',
+            userSelect: 'none',
+          }}
+        >
+          <svg width="28" height="28" viewBox="0 0 28 28" fill="none" opacity={0.18}>
+            <path
+              d="M22 5L8 19l-3 4 4-3L23 6a1.414 1.414 0 0 0-2-2Z"
+              stroke="white"
+              strokeWidth="1.5"
+              strokeLinejoin="round"
+            />
+          </svg>
+          <span
+            style={{
+              fontFamily: 'var(--font-sans)',
+              fontSize: 'var(--font-size-sm)',
+              color: 'rgba(255,255,255,0.15)',
+              letterSpacing: '0.04em',
+            }}
+          >
+            start drawing
+          </span>
+        </div>
+      )}
+
       {/* Konva Stage */}
       {stageSize.width > 0 && (
         <Stage
@@ -427,20 +553,14 @@ export default function WhiteboardCanvas() {
             scaleY={viewport.scale}
           >
             {elements.map((el) =>
-              renderElement(
-                el,
-                {
-                  selectable: isSelectTool,
-                  selected: el.id === selectedId,
-                  onSelect: () => setSelectedId(el.id),
-                  onDragEnd: (node) => handleDragEnd(el, node),
-                },
-              )
+              renderElement(el, {
+                selectable: isSelectTool,
+                selected: el.id === selectedId,
+                onSelect: () => setSelectedId(el.id),
+                onDragEnd: (node) => handleDragEnd(el, node),
+              }),
             )}
-
             {inProgress && renderElement(inProgress, inProgressOpts, '__inprogress__')}
-
-            {/* Selection outline via Transformer */}
             <Transformer
               ref={transformerRef}
               resizeEnabled={false}
@@ -452,6 +572,48 @@ export default function WhiteboardCanvas() {
             />
           </Layer>
         </Stage>
+      )}
+
+      {/* Text editor overlay */}
+      {activeText && (
+        <textarea
+          // eslint-disable-next-line jsx-a11y/no-autofocus
+          autoFocus
+          value={activeText.text}
+          rows={Math.max(1, activeText.text.split('\n').length)}
+          onChange={(e) => setActiveText({ ...activeText, text: e.target.value })}
+          onBlur={commitText}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') {
+              setActiveText(null)
+            } else if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault()
+              commitText()
+            }
+          }}
+          style={{
+            position: 'absolute',
+            left: toScreenX(activeText.x),
+            top: toScreenY(activeText.y),
+            fontSize: `${DEFAULT_FONT_SIZE * viewport.scale}px`,
+            fontFamily: 'Inter, system-ui, sans-serif',
+            lineHeight: 1.4,
+            color: drawingDefaults.strokeColor,
+            caretColor: drawingDefaults.strokeColor,
+            background: 'transparent',
+            border: 'none',
+            outline: '1.5px dashed rgba(91, 106, 240, 0.55)',
+            outlineOffset: 4,
+            borderRadius: 2,
+            resize: 'none',
+            padding: 0,
+            margin: 0,
+            minWidth: 4,
+            width: 200,
+            overflow: 'hidden',
+            zIndex: 10,
+          }}
+        />
       )}
     </div>
   )
